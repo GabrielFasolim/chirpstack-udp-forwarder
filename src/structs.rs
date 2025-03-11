@@ -1,6 +1,5 @@
 use std::convert::TryInto;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
@@ -12,6 +11,10 @@ use serde_json::Value;
 use chirpstack_api::gw;
 
 const PROTOCOL_VERSION: u8 = 0x02;
+
+// =====================
+// Semtech / ChirpStack structs
+// =====================
 
 pub enum Crc {
     Ok,
@@ -108,7 +111,6 @@ impl<'de> Deserialize<'de> for DataRate {
                 Ok(DataRate::Lora(sf, bw * 1000))
             }
             Value::Number(v) => {
-                // let bitrate = u32::deserialize(deserializer)?;
                 let br = v.as_u64().unwrap();
                 Ok(DataRate::Fsk(br as u32))
             }
@@ -157,6 +159,9 @@ impl<'de> Deserialize<'de> for CodeRate {
     }
 }
 
+// -------------
+// PushData
+// -------------
 pub struct PushData {
     pub random_token: u16,
     pub gateway_id: [u8; 8],
@@ -186,39 +191,32 @@ pub struct PushDataPayload {
     pub stat: Option<Stat>,
 }
 
+// -------------
+// RxPk
+// -------------
 #[derive(Serialize)]
 pub struct RxPk {
-    /// UTC time of pkt RX, us precision, ISO 8601 'compact' format
+    // UTC time of pkt RX, us precision, ISO 8601 'compact' format
     #[serde(with = "compact_time_format")]
     pub time: DateTime<Utc>,
-    /// GPS time of pkt RX, number of milliseconds since 06.Jan.1980
+    // GPS time of pkt RX, number of milliseconds since 06.Jan.1980
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmms: Option<u64>,
-    /// Internal timestamp of "RX finished" event (32b unsigned)
+    // Internal timestamp of "RX finished" event (32b unsigned)
     pub tmst: u32,
-    /// RX central frequency in MHz (unsigned float, Hz precision)
+    // RX central frequency in MHz
     pub freq: f64,
-    /// Concentrator "IF" channel used for RX (unsigned integer)
     pub chan: u32,
-    /// Concentrator "RF chain" used for RX (unsigned integer)
     pub rfch: u32,
-    /// Crc status: 1 = OK, -1 = fail, 0 = no Crc
     pub stat: Crc,
-    /// Modulation identifier "LORA" or "FSK"
     pub modu: Modulation,
-    /// LoRa datarate identifier (eg. SF12BW500)}
     pub datr: DataRate,
-    /// LoRa coding rate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codr: Option<CodeRate>,
-    /// RSSI in dBm (signed integer, 1 dB precision).
     pub rssi: i32,
-    /// Lora SNR ratio in dB (signed float, 0.1 dB precision).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lsnr: Option<f32>,
-    /// RF packet payload size in bytes (unsigned integer).
     pub size: u8,
-    /// Base64 encoded RF packet payload, padded.
     pub data: String,
 }
 
@@ -255,7 +253,7 @@ impl RxPk {
                 bytes.copy_from_slice(&rx_info.context);
                 u32::from_be_bytes(bytes)
             },
-            freq: tx_info.frequency as f64 / 1000000.0,
+            freq: tx_info.frequency as f64 / 1_000_000.0,
             chan: rx_info.channel,
             rfch: rx_info.rf_chain,
             stat: match rx_info.crc_status() {
@@ -264,61 +262,49 @@ impl RxPk {
                 gw::CrcStatus::NoCrc => Crc::Missing,
             },
             modu: match &tx_info.modulation {
-                Some(v) => match &v.parameters {
-                    Some(v) => match &v {
-                        gw::modulation::Parameters::Lora(_) => Modulation::Lora,
-                        gw::modulation::Parameters::Fsk(_) => Modulation::Fsk,
-                        gw::modulation::Parameters::LrFhss(_) => {
-                            return Err(anyhow!("unsupported modulation"));
-                        }
-                    },
-                    None => {
-                        return Err(anyhow!("parameters must not be None"));
+                Some(m) => match &m.parameters {
+                    Some(gw::modulation::Parameters::Lora(_)) => Modulation::Lora,
+                    Some(gw::modulation::Parameters::Fsk(_)) => Modulation::Fsk,
+                    Some(gw::modulation::Parameters::LrFhss(_)) => {
+                        return Err(anyhow!("unsupported modulation"));
                     }
+                    None => return Err(anyhow!("parameters must not be None")),
                 },
-                None => {
-                    return Err(anyhow!("modulation_info must not be None"));
-                }
+                None => return Err(anyhow!("modulation_info must not be None")),
             },
+
             datr: match &tx_info.modulation {
-                Some(v) => match &v.parameters {
-                    Some(v) => match &v {
-                        gw::modulation::Parameters::Lora(v) => {
-                            DataRate::Lora(v.spreading_factor, v.bandwidth)
-                        }
-                        gw::modulation::Parameters::Fsk(v) => DataRate::Fsk(v.datarate),
-                        gw::modulation::Parameters::LrFhss(_) => {
-                            return Err(anyhow!("unsupported modulation"));
-                        }
-                    },
-                    None => {
-                        return Err(anyhow!("parameters must not be None"));
+                Some(m) => match &m.parameters {
+                    Some(gw::modulation::Parameters::Lora(v)) => {
+                        DataRate::Lora(v.spreading_factor, v.bandwidth)
                     }
+                    Some(gw::modulation::Parameters::Fsk(v)) => DataRate::Fsk(v.datarate),
+                    Some(gw::modulation::Parameters::LrFhss(_)) => {
+                        return Err(anyhow!("unsupported modulation"));
+                    }
+                    None => return Err(anyhow!("parameters must not be None")),
                 },
-                None => {
-                    return Err(anyhow!("modulation_info must not be None"));
-                }
+                None => return Err(anyhow!("modulation_info must not be None")),
             },
+
             codr: match &tx_info.modulation {
-                Some(v) => match &v.parameters {
-                    Some(gw::modulation::Parameters::Lora(v)) => Some(match v.code_rate() {
-                        gw::CodeRate::Cr45 => CodeRate::LoRa4_5,
-                        gw::CodeRate::Cr46 => CodeRate::LoRa4_6,
-                        gw::CodeRate::Cr47 => CodeRate::LoRa4_7,
-                        gw::CodeRate::Cr48 => CodeRate::LoRa4_8,
-                        _ => CodeRate::Undefined,
-                    }),
-                    _ => None,
-                },
-                None => None,
+                Some(gw::Modulation {
+                    parameters: Some(gw::modulation::Parameters::Lora(v)),
+                }) => Some(match v.code_rate() {
+                    gw::CodeRate::Cr45 => CodeRate::LoRa4_5,
+                    gw::CodeRate::Cr46 => CodeRate::LoRa4_6,
+                    gw::CodeRate::Cr47 => CodeRate::LoRa4_7,
+                    gw::CodeRate::Cr48 => CodeRate::LoRa4_8,
+                    _ => CodeRate::Undefined,
+                }),
+                _ => None,
             },
             rssi: rx_info.rssi,
             lsnr: match &tx_info.modulation {
-                Some(v) => match &v.parameters {
-                    Some(gw::modulation::Parameters::Lora(_)) => Some(rx_info.snr),
-                    _ => None,
-                },
-                None => None,
+                Some(gw::Modulation {
+                    parameters: Some(gw::modulation::Parameters::Lora(_)),
+                }) => Some(rx_info.snr),
+                _ => None,
             },
             size: up.phy_payload.len() as u8,
             data: general_purpose::STANDARD.encode(up.phy_payload.clone()),
@@ -326,33 +312,36 @@ impl RxPk {
     }
 }
 
+// -------------
+// Stat
+// -------------
 #[derive(Serialize)]
 pub struct Stat {
     /// UTC 'system' time of the gateway, ISO 8601 'expanded' format.
     #[serde(with = "expanded_time_format")]
     pub time: DateTime<Utc>,
-    /// GPS latitude of the gateway in degree (float, N is +).
+    /// GPS latitude do gateway.
     pub lati: f64,
-    /// GPS latitude of the gateway in degree (float, E is +).
+    /// GPS longitude do gateway.
     pub long: f64,
-    /// GPS altitude of the gateway in meter RX (integer).
+    /// GPS altitude do gateway em metros.
     pub alti: u32,
-    /// Number of radio packets received (unsigned integer).
+    /// Número de pacotes de rádio recebidos.
     pub rxnb: u32,
-    /// Number of radio packets received with a valid PHY Crc.
+    /// Número de pacotes de rádio recebidos com um PHY Crc válido.
     pub rxok: u32,
-    /// Number of radio packets forwarded (unsigned integer).
+    /// Número de pacotes de rádio encaminhados.
     pub rxfw: u32,
-    /// Percentage of upstream datagrams that were acknowledged.
+    /// Porcentagem de datagramas upstream que foram reconhecidos.
     pub ackr: f32,
-    /// Number of downlink datagrams received (unsigned integer).
+    /// Número de datagramas de downlink recebidos.
     pub dwnb: u32,
-    /// Number of packets emitted (unsigned integer).
+    /// Número de pacotes emitidos.
     pub txnb: u32,
 }
 
 impl Stat {
-    pub fn from_proto(stats: &chirpstack_api::gw::GatewayStats) -> Result<Self> {
+    pub fn from_proto(stats: &gw::GatewayStats) -> Result<Self> {
         Ok(Stat {
             time: match &stats.time {
                 Some(v) => match TryInto::<SystemTime>::try_into(*v) {
@@ -361,18 +350,9 @@ impl Stat {
                 },
                 None => Utc::now(),
             },
-            lati: match &stats.location {
-                Some(v) => v.latitude,
-                None => 0.0,
-            },
-            long: match &stats.location {
-                Some(v) => v.longitude,
-                None => 0.0,
-            },
-            alti: match &stats.location {
-                Some(v) => v.altitude as u32,
-                None => 0,
-            },
+            lati: stats.location.as_ref().map_or(0.0, |loc| loc.latitude),
+            long: stats.location.as_ref().map_or(0.0, |loc| loc.longitude),
+            alti: stats.location.as_ref().map_or(0, |loc| loc.altitude as u32),
             rxnb: stats.rx_packets_received,
             rxok: stats.rx_packets_received_ok,
             rxfw: 0,
@@ -383,6 +363,9 @@ impl Stat {
     }
 }
 
+// -------------
+// PushAck
+// -------------
 pub struct PushAck {
     pub random_token: u16,
 }
@@ -414,6 +397,9 @@ impl PushAck {
     }
 }
 
+// -------------
+// PullData
+// -------------
 pub struct PullData {
     pub random_token: u16,
     pub gateway_id: [u8; 8],
@@ -426,11 +412,13 @@ impl PullData {
         b.append(&mut self.random_token.to_be_bytes().to_vec());
         b.push(0x02);
         b.append(&mut self.gateway_id.to_vec());
-
         b
     }
 }
 
+// -------------
+// PullAck
+// -------------
 pub struct PullAck {
     pub random_token: u16,
 }
@@ -462,6 +450,9 @@ impl PullAck {
     }
 }
 
+// -------------
+// PullResp
+// -------------
 pub struct PullResp {
     pub random_token: u16,
     pub payload: PullRespPayload,
@@ -502,33 +493,23 @@ pub struct PullRespPayload {
     pub txpk: TxPk,
 }
 
+// -------------
+// TxPk
+// -------------
 #[derive(Deserialize)]
 pub struct TxPk {
-    /// Send packet immediately (will ignore tmst & time).
     pub imme: Option<bool>,
-    /// Send packet on a certain timestamp value (will ignore time).
     pub tmst: Option<u32>,
-    /// Send packet at a certain GPS time (GPS synchronization required).
     pub tmms: Option<u64>,
-    /// TX central frequency in MHz (unsigned float, Hz precision).
     pub freq: f64,
-    /// TX output power in dBm (unsigned integer, dBm precision).
     pub powe: u8,
-    /// Modulation identifier "LORA" or "FSK".
     pub modu: Modulation,
-    /// LoRa datarate identifier (eg. SF12BW500).
     pub datr: DataRate,
-    /// LoRa ECC coding rate identifier.
     pub codr: Option<CodeRate>,
-    /// FSK frequency deviation (unsigned integer, in Hz) .
     pub fdev: Option<u32>,
-    /// Lora modulation polarization inversion.
     pub ipol: Option<bool>,
-    /// RF preamble size (unsigned integer).
     pub prea: Option<u8>,
-    /// Base64 encoded RF packet payload, padding optional.
     pub data: String,
-    /// If true, disable the Crc of the physical layer (optional).
     pub ncrc: Option<bool>,
 }
 
@@ -587,8 +568,6 @@ impl TxPk {
                 } else if self.tmst.is_some() {
                     gw::timing::Parameters::Delay(gw::DelayTimingInfo {
                         delay: Some(prost_types::Duration {
-                            // This is correct! The delay is already added to the tmst which is
-                            // used to set the context.
                             seconds: 0,
                             nanos: 0,
                         }),
@@ -601,10 +580,7 @@ impl TxPk {
                     return Err(anyhow!("no timing information found"));
                 }),
             }),
-            context: self
-                .tmst
-                .map(|v| v.to_be_bytes().to_vec())
-                .unwrap_or_default(),
+            context: self.tmst.map(|v| v.to_be_bytes().to_vec()).unwrap_or_default(),
         };
 
         Ok(chirpstack_api::gw::DownlinkFrame {
@@ -625,6 +601,9 @@ impl TxPk {
     }
 }
 
+// -------------
+// TxAck
+// -------------
 pub struct TxAck {
     pub random_token: u16,
     pub gateway_id: [u8; 8],
@@ -657,7 +636,9 @@ pub struct TxAckPayloadError {
     pub error: String,
 }
 
-// see: https://serde.rs/custom-date-format.html
+// ===============
+// Formatação custom de datas
+// ===============
 mod expanded_time_format {
     use chrono::{DateTime, Utc};
     use serde::{self, Serializer};
@@ -687,6 +668,93 @@ mod compact_time_format {
         serializer.serialize_str(&s)
     }
 }
+
+// ============================
+// NOVAS STRUCTS PARA PROTOCOLO MESH (JSON) - "rxpk", "stat", "txpk"
+// ============================
+
+/// Mensagem de Uplink MESH, contendo zero ou mais `rxpk` e opcionalmente um `stat`.
+#[derive(Debug, Deserialize)]
+pub struct CustomUplink {
+    /// Zero ou mais objetos rxpk.
+    #[serde(default)]
+    pub rxpk: Vec<CustomRxpk>,
+
+    /// Objeto stat opcional.
+    #[serde(default)]
+    pub stat: Option<CustomStat>,
+}
+
+/// Objeto rxpk (pacote recebido).
+/// Exemplo de JSON:
+/// "rxpk": {
+///   "tmst": 60000,
+///   "rssi": 50,
+///   "snr": -5,
+///   "size": 31,
+///   "data": "AgDiAAAZGhwbGAA..."
+/// }
+#[derive(Debug, Deserialize)]
+pub struct CustomRxpk {
+    pub tmst: u32,
+
+    #[serde(default)]
+    pub rssi: Option<u8>, // se omitido, é None
+
+    #[serde(default)]
+    pub snr: Option<i8>,  // se omitido, é None
+
+    pub size: u8,
+    pub data: String,
+}
+
+/// Objeto stat (estatísticas do concentrador).
+/// Exemplo de JSON:
+/// "stat": {
+///   "tmst":40000,
+///   "lati":-25.41068,
+///   "long":-49.20843,
+///   "upns":10,
+///   "dwns":9,
+///   "temp":32,
+///   "volt":33
+/// }
+#[derive(Debug, Deserialize)]
+pub struct CustomStat {
+    pub tmst: u32,
+    #[serde(default)]
+    pub lati: Option<f64>,
+    #[serde(default)]
+    pub long: Option<f64>,
+
+    pub upns: u32,
+    pub dwns: u32,
+
+    pub temp: i8,
+    pub volt: u8,
+}
+
+/// Mensagem de Downlink MESH, contendo um objeto `txpk`.
+#[derive(Debug, Deserialize)]
+pub struct CustomDownlink {
+    pub txpk: CustomTxpk,
+}
+
+/// Objeto txpk (pacote para enviar ao rádio).
+/// Exemplo de JSON:
+/// "txpk": {
+///   "size":8,
+///   "data":"AADiAAAAFbg="
+/// }
+#[derive(Debug, Deserialize)]
+pub struct CustomTxpk {
+    pub size: u8,
+    pub data: String,
+}
+
+// ============================
+// Testes
+// ============================
 
 #[cfg(test)]
 mod tests {

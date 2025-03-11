@@ -1,0 +1,50 @@
+# UDP Forwarder configuration.
+[udp_forwarder]
+
+  # Nível de log.
+  #
+  # Possíveis valores:
+  #   * TRACE
+  #   * DEBUG
+  #   * INFO
+  #   * WARN
+  #   * ERROR
+  #   * OFF
+  log_level="INFO"
+
+  # Log para syslog.
+  #
+  # Quando true, as mensagens de log vão para o syslog (ao invés de stdout).
+  log_to_syslog=false
+
+  # Exposição de métricas Prometheus.
+  #
+  # Exemplo: "0.0.0.0:9800" (deixe vazio para desabilitar).
+  metrics_bind="0.0.0.0:9800"
+
+  # Definição de um ou mais servidores Semtech UDP para encaminhar os pacotes.
+  # É possível repetir a seção [[udp_forwarder.servers]] para múltiplos destinos.
+  [[udp_forwarder.servers]]
+    # Endereço do servidor no formato "hostname:porta".
+    server="localhost:1700"
+
+    # Intervalo (em segundos) para enviar mensagens de keepalive (PULL_DATA).
+    keepalive_interval_secs=10
+
+    # Máximo de falhas de keepalive antes de reconectar.
+    keepalive_max_failures=12
+
+    # Opções de encaminhamento por tipo de CRC:
+    forward_crc_ok=true
+    forward_crc_invalid=false
+    forward_crc_missing=false
+
+
+# Configuração do Concentratord.
+[concentratord]
+
+  # URL do socket de eventos (Concentratord → Forwarder).
+  event_url="ipc:///tmp/concentratord_event"
+
+  # URL do socket de comandos (Forwarder → Concentratord).
+  command_url="ipc:///tmp/concentratord_command"
